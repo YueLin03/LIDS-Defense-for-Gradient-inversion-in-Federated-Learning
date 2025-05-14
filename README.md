@@ -40,3 +40,4 @@ python3 train_resnet.py --dataset Cifar100 --lids
 ```
 
 the results will be saved in the `LIDS/logs` folder.
+This repository is currently undergoing active refactoring and modularization. We target an initial runnable release by 15 May 2025, with the project roadmap and outstanding tasks to be continuously tracked and updated.
