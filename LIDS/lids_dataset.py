@@ -25,30 +25,30 @@ class LIDS_Dataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
 
-class SimpleSampler(torch.utils.data.Sampler):
-    def __init__(self, origin_datalen: int, generate_datalen: int,dataset_group_size: int, group_size: int, repeat_num: int, base_to_smote: dict):
-        np.random.seed(1337)
-        self.origin_datalen = origin_datalen
-        self.generate_datalen = generate_datalen
-        self.dataset_group_size = dataset_group_size
-        self.group_size = group_size
-        self.repeat_num = repeat_num
-        indices = np.arange(self.origin_datalen)
-        expanded_indices = np.tile(indices, 4)
-        np.random.shuffle(expanded_indices)
-        if (self.repeat_num >= self.group_size-1):
-            self.repeat_num = self.group_size-1
-        self.final_indices = [[idx for _ in range(self.repeat_num+1)]+[(base_to_smote[idx][i]+self.origin_datalen) for i in range(self.group_size-1 - self.repeat_num) ] for idx in expanded_indices]
+# class SimpleSampler(torch.utils.data.Sampler):
+#     def __init__(self, origin_datalen: int, generate_datalen: int,dataset_group_size: int, group_size: int, repeat_num: int, base_to_smote: dict):
+#         np.random.seed(1337)
+#         self.origin_datalen = origin_datalen
+#         self.generate_datalen = generate_datalen
+#         self.dataset_group_size = dataset_group_size
+#         self.group_size = group_size
+#         self.repeat_num = repeat_num
+#         indices = np.arange(self.origin_datalen)
+#         expanded_indices = np.tile(indices, 4)
+#         np.random.shuffle(expanded_indices)
+#         if (self.repeat_num >= self.group_size-1):
+#             self.repeat_num = self.group_size-1
+#         self.final_indices = [[idx for _ in range(self.repeat_num+1)]+[(base_to_smote[idx][i]+self.origin_datalen) for i in range(self.group_size-1 - self.repeat_num) ] for idx in expanded_indices]
 
-        #self.final_indices = [[idx] + [idx * (self.dataset_group_size-1) + i + self.origin_datalen for i in range(self.group_size - 1)] for idx in indices]
-        self.flattened_indices = [idx for batch in self.final_indices for idx in batch]
-    def __iter__(self):
-        return iter(self.flattened_indices)
+#         #self.final_indices = [[idx] + [idx * (self.dataset_group_size-1) + i + self.origin_datalen for i in range(self.group_size - 1)] for idx in indices]
+#         self.flattened_indices = [idx for batch in self.final_indices for idx in batch]
+#     def __iter__(self):
+#         return iter(self.flattened_indices)
     
-    def __len__(self):
-        return self.generate_datalen
+#     def __len__(self):
+#         return self.generate_datalen
 
-import torch
+# import torch
 
 # def get_psnr_score(batch_imgs, ref_img, factor=1.0, clip=True):
 #     """
