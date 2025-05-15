@@ -32,6 +32,8 @@ def main():
                         help='Batch size')
     parser.add_argument('--base-num', type=int, default=8,
                         help='Base batch size for SMOTE groups')
+    parser.add_argument('--init-finetune-epoch', type=int, default=2000,
+                        help='Number of initial finetuning epochs')
     parser.add_argument('--finetune-epoch', type=int, default=1000,
                         help='Number of finetuning epochs')
     parser.add_argument('--finetune-images-num', type=int, default=10000,
@@ -46,6 +48,8 @@ def main():
                         help='Apply contrast augmentations if True')
     parser.add_argument('--img_distance', type=str, default="MSE",
                         help='Distance metric for image comparison')
+    parser.add_argument('--denormalize',  type=str, choices=['False', 'True'], default='False',
+                        help='Denormalize the lids dataset or not')
     args = parser.parse_args()
 
     # Set random seeds for reproducibility
@@ -85,7 +89,7 @@ def main():
     dataset_dir = (
         f"./lids_datasets/{args.dataset}/train_{args.train}/"
         f"denorm_{args.denormalize}/{args.img_distance}/"
-        f"finetune_i{args.finetune_init_epoch}_n{args.finetune_images_num}_"
+        f"finetune_i{args.init_finetune_epoch}_n{args.finetune_images_num}_"
         f"e{args.finetune_epoch}/psnr_thresh{args.psnr_threshold}"
     )
     lids_A_path = os.path.join(dataset_dir, 'aug_False.dst')
