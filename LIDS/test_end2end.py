@@ -6,7 +6,8 @@ from data import *
 from PIL import Image
 import time
 from model import *
-from lids_dataset import LIDS_Dataset,SimpleSampler
+from lids_dataset import LIDS_Dataset
+from dataloader import SimpleSampler
 import os
 import torch
 import torchvision
@@ -197,7 +198,7 @@ if args.name == "random":
 elif args.name == "repeat":
     repeat_num = args.batch_size // args.base_num
     loader = DataLoader(eval_dataset, batch_size=args.batch_size // repeat_num ,shuffle=False, num_workers=2,sampler = torch.utils.data.RandomSampler(eval_dataset, replacement=False, num_samples=int(1e10)))  
-elif args.name == "OGM":
+elif args.name == "LIDS":
     ae_dataset = torch.load(args.dataset_path)
     print(f"Loaded dataset type: {type(ae_dataset)}")
     print(f"Testset len: {len(ae_dataset)}")
@@ -214,7 +215,6 @@ elif args.name == "OGM":
     batches_image_indices = sampler.final_indices
     batch_indices = []
 
-    # 初始化 batch_indices 列表，根據預期的大小來初始化
     num_batches = len(batches_image_indices) // args.base_num + 1
     batch_indices = [[] for _ in range(num_batches)] 
     for batch_idx,batch in enumerate (batches_image_indices):
@@ -264,7 +264,7 @@ metrics = []
 
 # 確保輸出資料夾存在
 output_folder = f"images/paper/{args.dataset}/{args.name}/{args.atk_prop}"
-if args.name == "OGM":
+if args.name == "LIDS":
     output_folder = f"images/paper/autoencoder/{args.dataset}/{args.augment}/{args.img_distance}/finetune_epoch{args.finetune_epoch}/finetune_images-{args.finetune_images_num}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/{args.atk_prop}/dynamic_alpha/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1/psnr-{args.psnr_threshold}"
 os.makedirs(output_folder, exist_ok=True)
 repeat_num = args.batch_size // args.base_num
@@ -295,7 +295,7 @@ for i, (X, y) in enumerate(loader):
     
 
     # 根據 scoring 決定處理邏輯
-    if args.name == "OGM":
+    if args.name == "LIDS":
         batch_indices = list(iter(loader.sampler))[i*args.batch_size:(i+1)*args.batch_size]
         print(f"batch_idx {i} batch_indices: {batch_indices}")
         neiglhbor_num = int(args.batch_size // args.base_num)-1
@@ -419,7 +419,7 @@ test_results= {
         "PSNR_Top_std": PSNR_Top_std,
         }
 test_data_output_dir = f"./test_data/paper/{args.dataset}/{args.name}/{args.atk_prop}"
-if args.name == "OGM":
+if args.name == "LIDS":
     test_data_output_dir = f"./test_data/paper/{args.dataset}/{args.name}/{args.augment}/{args.atk_prop}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1/"
     test_data_output_path = test_data_output_dir + f"psnr_threshold-{args.psnr_threshold}.pkl"    
 else:
@@ -428,7 +428,7 @@ os.makedirs(test_data_output_dir, exist_ok=True)
 pickle.dump(test_results, open(test_data_output_path, 'wb'))
 
 
-if args.name == "OGM":
+if args.name == "LIDS":
     csv_output_dir = f"./csv_file/paper/{args.dataset}/{args.augment}/{args.img_distance}/{args.finetune_images_num}/{args.finetune_epoch}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/{args.atk_prop}/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1"
     csv_output_path = csv_output_dir + f"/psnr{args.psnr_threshold}.csv"
     item_csv_output_path = csv_output_dir + f"/itemwise_psnr{args.psnr_threshold}.csv"
