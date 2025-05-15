@@ -114,6 +114,7 @@ class LIDSGroupAutoencoder:
         self.max_alpha = args.max_alpha
         self.finetune_images_num = args.finetune_images_num
         self.base_num = args.base_num
+        self.batch_size = args.batch_size
         self.n_components = args.n_components
         self.class_num = 100 if args.dataset == 'Cifar100' else 10
         self.autoencoder = autoencoder.to(self.device)
@@ -160,7 +161,7 @@ class LIDSGroupAutoencoder:
             start = time.time()
             ae = self._batch_finetune([target_dataset[i] for i in grp], finetune_epoch, gid)
             total_time += time.time() - start
-
+            
             # Class-wise neighbor selection
             for base_idx in grp:
                 lbl = int(labels[base_idx])
@@ -179,8 +180,8 @@ class LIDSGroupAutoencoder:
                     dists = np.linalg.norm(vectors_pca[base_idx] - vectors_pca[same_cls], axis=1)
 
                 # Select nearest neighbors
-                nbrs = [same_cls[i] for i in np.argsort(dists)[: max(1, len(grp)//self.base_num - 1)]]
-
+                nbrs = [same_cls[i] for i in np.argsort(dists)[: max(1, self.batch_size//self.base_num - 1)]]
+                #print(f"base{base_idx} len of neighbors {len(nbrs)}")
                 # Generate samples per neighbor
                 for nbr in nbrs:
                     out_samps, out_lbls, out_als = self._generate_samples(
@@ -189,6 +190,8 @@ class LIDSGroupAutoencoder:
                     samples.extend(out_samps)
                     sample_labels.extend(out_lbls)
                     alphas.extend(out_als)
+            if (len(samples)%1000 == 0):
+                print(f"Generate {len(samples)} imgs")
 
         dataset = TensorDataset(
             torch.tensor(np.stack(samples), dtype=torch.float32),
@@ -212,7 +215,7 @@ class LIDSGroupAutoencoder:
         while alpha <= self.max_alpha:
             interp = enc_nbr + alpha * (enc_base - enc_nbr)
             dec = ae.decoder(interp).squeeze(0).detach().cpu().numpy()
-            if get_psnr(base_t.squeeze(), dec) > self.psnr_threshold:
+            if get_psnr(base_t.squeeze().detach().cpu().numpy(), dec) > self.psnr_threshold:
                 out_samps.append(dec)
                 out_labels.append(label)
                 out_als.append(alpha)
@@ -309,7 +312,7 @@ def generate_dataset(args, target_dataset):
     # Initialize or load autoencoder
     model_dir = f"./weights/{args.dataset}/{'train' if args.train=='True' else 'test'}"
     os.makedirs(model_dir, exist_ok=True)
-    model_path = os.path.join(model_dir, 'best_autoencoder.pth')
+    model_path = os.path.join(model_dir, f'init{args.init_finetune_epoch}_best_autoencoder.pth')
     log_dir = f"./logs/{args.dataset}/train_{args.train}"
     os.makedirs(log_dir, exist_ok=True)
 
