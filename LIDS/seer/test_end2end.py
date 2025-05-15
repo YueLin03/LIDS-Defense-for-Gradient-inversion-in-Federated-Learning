@@ -6,8 +6,7 @@ from data import *
 from PIL import Image
 import time
 from model import *
-from lids_dataset import LIDS_Dataset
-from dataloader import SimpleSampler
+from generate_smote_dataset import AutoencoderDataset,SimpleSampler,get_psnr_score
 import os
 import torch
 import torchvision
@@ -26,7 +25,9 @@ parser.add_argument('--train', type=str,choices=['False', 'True'], default='Fals
 parser.add_argument('--seed', type=int, default=seed)
 parser.add_argument('--name', type=str, default="default")
 parser.add_argument('--device', type=str, help='device', default="cuda:0")
+parser.add_argument('--scoring', type=str,default="property")
 parser.add_argument('--atk-prop', type=str, default="bright")
+parser.add_argument('--def-prop', type=str, default="bright")
 parser.add_argument('--n-components', type=int, default=17)
 parser.add_argument('--dataset', type=str, default="Cifar10")
 parser.add_argument('--model', type=str)
@@ -39,20 +40,36 @@ parser.add_argument('--psnr-threshold', type=float, default=18, help='PSNR thres
 parser.add_argument('--init-alpha', type=float, default=0.05, help='Initial alpha value for interpolation')
 parser.add_argument('--max-alpha', type=float, default=0.95, help='Maximum alpha value for interpolation')
 parser.add_argument('--dataset-group-size', type=int, default=8, help='Smote dataset group length')
-parser.add_argument('--lids-dataset-path', type=str, default=None)
+parser.add_argument('--dataset-path', type=str, default=None)
 parser.add_argument('--augment', type=str, default="Norm")
-parser.add_argument('--img-distance', type=str, default="MSE")
+parser.add_argument('--img_distance', type=str, default="MSE")
 parser.add_argument('--repeat-num', type=int, default=0)
 parser.add_argument('--test-batches-num', type=int, default=10)
+parser.add_argument('--contrast', type=int, default=1)
 
 args=parser.parse_args()
 print(args)
 def add_red_tint(img):
+    """
+    增加圖片的紅色色調
+    Args:
+        img (Tensor): 圖片張量，形狀為 (C, H, W)
+    Returns:
+        Tensor: 加入紅色調後的圖片張量
+    """
+    # 確保輸入是 Tensor
     if not torch.is_tensor(img):
         raise TypeError("Input should be a PyTorch Tensor")
+
+    # 複製圖片以避免改變原始資料
     img = img.clone()
-    img[0] += 0.2
+
+    # 增加紅色通道 (第 0 個通道)
+    img[0] += 0.2  # 調整這個值來增加紅色的強度
+
+    # 確保像素值範圍仍然在 [0, 1]
     img = torch.clamp(img, 0, 1)
+
     return img
 def datasets_Cifar10():
     transform_train = transforms.Compose(
@@ -176,9 +193,12 @@ def get_top_k_indices(psnr_scores, k=4):
 
 
 if args.name == "random":
-    loader = DataLoader(eval_dataset, batch_size=args.batch_size, num_workers=2,shuffle=False,sampler = torch.utils.data.RandomSampler(eval_dataset, replacement=False, num_samples=int(1e10))) 
-elif args.name == "LIDS":
-    ae_dataset = torch.load(args.lisd_dataset_path)
+    loader = DataLoader(eval_dataset, batch_size=args.batch_size, num_workers=2,shuffle=False,sampler = torch.utils.data.RandomSampler(eval_dataset, replacement=False, num_samples=int(1e10)))
+elif args.name == "repeat":
+    repeat_num = args.batch_size // args.base_num
+    loader = DataLoader(eval_dataset, batch_size=args.batch_size // repeat_num ,shuffle=False, num_workers=2,sampler = torch.utils.data.RandomSampler(eval_dataset, replacement=False, num_samples=int(1e10)))  
+elif args.name == "OGM":
+    ae_dataset = torch.load(args.dataset_path)
     print(f"Loaded dataset type: {type(ae_dataset)}")
     print(f"Testset len: {len(ae_dataset)}")
     smote_to_base = {}
@@ -194,6 +214,7 @@ elif args.name == "LIDS":
     batches_image_indices = sampler.final_indices
     batch_indices = []
 
+    # 初始化 batch_indices 列表，根據預期的大小來初始化
     num_batches = len(batches_image_indices) // args.base_num + 1
     batch_indices = [[] for _ in range(num_batches)] 
     for batch_idx,batch in enumerate (batches_image_indices):
@@ -236,18 +257,18 @@ def save_image(image, file_path):
     plt.savefig(file_path, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close(fig)  # Close the figure to avoid memory issues
 print(f"attack prop: {args.atk_prop}, defense prop: {args.def_prop}")
-
+# 初始化變數
 TARGET_indices, TARGET_class = [], []
 ssims, psnrs, lpips_list = [], [], []
 metrics = []
 
-
+# 確保輸出資料夾存在
 output_folder = f"images/paper/{args.dataset}/{args.name}/{args.atk_prop}"
-if args.name == "LIDS":
+if args.name == "OGM":
     output_folder = f"images/paper/autoencoder/{args.dataset}/{args.augment}/{args.img_distance}/finetune_epoch{args.finetune_epoch}/finetune_images-{args.finetune_images_num}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/{args.atk_prop}/dynamic_alpha/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1/psnr-{args.psnr_threshold}"
 os.makedirs(output_folder, exist_ok=True)
 repeat_num = args.batch_size // args.base_num
-
+# 逐批處理
 for i, (X, y) in enumerate(loader):
     if (args.name == "repeat"):
         if (i == 0):
@@ -258,12 +279,12 @@ for i, (X, y) in enumerate(loader):
         if (i == 0):
             print(f"len X {len(X)}, len y {len(y)}")
     if X.shape[0] != args.batch_size: 
-        continue  
+        continue  # 跳過小於批次大小的批次
     if (i >= args.test_batches_num):
         break
     print(f"Processing Batch {i}...")
 
-    
+    # 計算梯度與重新建構
     bdW, _ = grad_ex(X, y, torch.nn.CrossEntropyLoss(reduction='none'), flat_cat=True, single_grad=True, testing=True)
     disaggregator_o = disaggregator(bdW)
     reconstructor_o = reconstructor(disaggregator_o).reshape(-1, *(3, 32, 32))
@@ -273,7 +294,8 @@ for i, (X, y) in enumerate(loader):
     batch_indices = []
     
 
-    if args.name == "LIDS":
+    # 根據 scoring 決定處理邏輯
+    if args.name == "OGM":
         batch_indices = list(iter(loader.sampler))[i*args.batch_size:(i+1)*args.batch_size]
         print(f"batch_idx {i} batch_indices: {batch_indices}")
         neiglhbor_num = int(args.batch_size // args.base_num)-1
@@ -385,7 +407,7 @@ PSNR_Top_std = np.std(PSNR_Top)
 print(f"Mean SSIM: {np.mean(ssims):.4f}, Std SSIM: {np.std(ssims):.4f}")
 print(f"Mean PSNR: {np.mean(psnrs):.4f}, Std PSNR: {np.std(psnrs):.4f}")
 print(f"Mean LPIPS: {np.mean(lpips_list):.4f}, Std LPIPS: {np.std(lpips_list):.4f}")
-
+# 儲存統計結果到 CSV
 import pickle
 
 test_results= {
@@ -397,7 +419,7 @@ test_results= {
         "PSNR_Top_std": PSNR_Top_std,
         }
 test_data_output_dir = f"./test_data/paper/{args.dataset}/{args.name}/{args.atk_prop}"
-if args.name == "LIDS":
+if args.name == "OGM":
     test_data_output_dir = f"./test_data/paper/{args.dataset}/{args.name}/{args.augment}/{args.atk_prop}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1/"
     test_data_output_path = test_data_output_dir + f"psnr_threshold-{args.psnr_threshold}.pkl"    
 else:
@@ -406,7 +428,7 @@ os.makedirs(test_data_output_dir, exist_ok=True)
 pickle.dump(test_results, open(test_data_output_path, 'wb'))
 
 
-if args.name == "LIDS":
+if args.name == "OGM":
     csv_output_dir = f"./csv_file/paper/{args.dataset}/{args.augment}/{args.img_distance}/{args.finetune_images_num}/{args.finetune_epoch}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/{args.atk_prop}/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1"
     csv_output_path = csv_output_dir + f"/psnr{args.psnr_threshold}.csv"
     item_csv_output_path = csv_output_dir + f"/itemwise_psnr{args.psnr_threshold}.csv"
