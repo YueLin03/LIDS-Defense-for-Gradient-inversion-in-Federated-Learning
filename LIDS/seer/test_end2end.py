@@ -1,59 +1,77 @@
-import torch
-import matplotlib.pyplot as plt
-from train import *
-import torchvision
-from data import *
-from PIL import Image
+import os
+import argparse
 import time
+import csv
+import pickle
+import numpy as np
+import torch
+import torchvision
+from torch.utils.data import DataLoader, Subset
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
+
+from train import *
+from data import *
 from model import *
 from lids_dataset import LIDS_Dataset
 from dataloader import SimpleSampler
-import os
-import torch
-import torchvision
-from parameters import *
-from torch.utils.data import DataLoader, Subset
-import torchvision.transforms as transforms 
-import numpy as np
-import csv
-
 from simple_breach import run_metrics
-seed = 1337
-np.random.seed(seed)
-torch.random.manual_seed(seed)
+from parameters import *
+# -------------------------------------
+# Argument Parser
+# -------------------------------------
 parser = argparse.ArgumentParser(description='sampler defense')
-parser.add_argument('--train', type=str,choices=['False', 'True'], default='False')
-parser.add_argument('--seed', type=int, default=seed)
-parser.add_argument('--name', type=str, default="default")
-parser.add_argument('--device', type=str, help='device', default="cuda:0")
-parser.add_argument('--atk-prop', type=str, default="bright")
+parser.add_argument('--train', type=str, choices=['False','True'], default='False')
+parser.add_argument('--seed', type=int, default=1337)
+parser.add_argument('--defense', type=str, choices=['default','random','LIDS','LIDS-A'], default='default')
+parser.add_argument('--device', type=str, default='cuda:0')
+parser.add_argument('--atk-prop', type=str, default='bright')
 parser.add_argument('--n-components', type=int, default=17)
-parser.add_argument('--dataset', type=str, default="Cifar10")
-parser.add_argument('--model', type=str)
-parser.add_argument('--random-loader', type=bool)
-parser.add_argument('--batch-size', type=int, default=64, help='Batch size for training')
-parser.add_argument('--base-num', type=int, default=8, help='Batch size for training')
+parser.add_argument('--dataset', type=str, choices=['Cifar10','Cifar100'], default='Cifar10')
+parser.add_argument('--model', type=str, required=True)
+parser.add_argument('--random-loader', type=bool, default=False)
+parser.add_argument('--batch-size', type=int, default=64)
+parser.add_argument('--base-num', type=int, default=8)
 parser.add_argument('--finetune-epoch', type=int, default=1000)
 parser.add_argument('--finetune-images-num', type=int, default=10000)
-parser.add_argument('--psnr-threshold', type=float, default=18, help='PSNR threshold for sample selection')
-parser.add_argument('--init-alpha', type=float, default=0.05, help='Initial alpha value for interpolation')
-parser.add_argument('--max-alpha', type=float, default=0.95, help='Maximum alpha value for interpolation')
-parser.add_argument('--dataset-group-size', type=int, default=8, help='Smote dataset group length')
+parser.add_argument('--psnr-threshold', type=float, default=18.0)
+parser.add_argument('--init-alpha', type=float, default=0.5)
+parser.add_argument('--max-alpha', type=float, default=0.9)
+parser.add_argument('--dataset-group-size', type=int, default=8)
 parser.add_argument('--lids-dataset-path', type=str, default=None)
-parser.add_argument('--augment', type=str, default="Norm")
-parser.add_argument('--img-distance', type=str, default="MSE")
+parser.add_argument('--img-distance', type=str, default='MSE')
 parser.add_argument('--repeat-num', type=int, default=0)
 parser.add_argument('--test-batches-num', type=int, default=10)
-
-args=parser.parse_args()
+args = parser.parse_args()
+np.random.seed(args.seed)
+torch.random.manual_seed(args.seed)
 print(args)
+
+# -------------------------------------
+# Build LIDS Dataset Paths
+# -------------------------------------
+base_dataset_dir = (
+    f"./lids_datasets/{args.dataset}/train_{args.train}/"
+    f"denorm_{args.denormalize}/{args.img_distance}/"
+    f"finetune_i{args.init_finetune_epoch}_n{args.finetune_images_num}_"
+    f"e{args.finetune_epoch}/psnr_thresh{args.psnr_threshold}"
+)
+
+lids_A_path = os.path.join(base_dataset_dir, 'aug_False.dst')
+lids_path   = os.path.join(base_dataset_dir, 'aug_True.dst')
+
+if args.defense in ['LIDS','LIDS-A'] and args.lids_dataset_path is None:
+    args.lids_dataset_path = lids_A_path if args.defense=='LIDS-A' else lids_path
+
+# -------------------------------------
+# Dataset & Transforms
+# -------------------------------------
 def add_red_tint(img):
     if not torch.is_tensor(img):
         raise TypeError("Input should be a PyTorch Tensor")
-    img = img.clone()
-    img[0] += 0.2
-    img = torch.clamp(img, 0, 1)
-    return img
+    img = img.clone(); img[0] += 0.2
+    return torch.clamp(img,0,1)
+
 def datasets_Cifar10():
     transform_train = transforms.Compose(
     [transforms.ColorJitter(brightness= 0.2, contrast= 0.1, saturation=0.1, hue=0.05),
@@ -119,22 +137,18 @@ def create_subset(dataset):
 
     return subset_dataset
 
-# trainset,testset = datasets_Cifar10()
-if (args.dataset =="Cifar10"):
-    trainset, testset,red_dataset = datasets_Cifar10()
-elif (args.dataset =="Cifar100"):
-    trainset, testset,red_dataset = datasets_Cifar100()
+# Select dataset
+if args.dataset=='Cifar10':
+    trainset,testset,red_dataset = datasets_Cifar10()
+elif args.dataset=='Cifar100':
+    trainset,testset,red_dataset = datasets_Cifar100()
+
+# Evaluation dataset
+eval_dataset = testset if args.defense!='red_dataset' else red_dataset
 
 
-eval_dataset = testset
-if args.dataset == "red_dataset":
-    print("red_dataset")
-    eval_dataset = red_dataset
 
-
-args.model = f"/trainingData/sage/alan/defence_seer/backup/{args.dataset}/B64C1{args.atk_prop}{args.dataset}Epoch1000.params"
-
-
+args.model = f"../weights/B64C1{args.atk_prop}{args.dataset}Epoch1000.params"
 checkpoint = torch.load(args.model, map_location=torch.device('cpu'))
 print(f"model{args.model}")
 device = args.device
@@ -175,10 +189,10 @@ def get_top_k_indices(psnr_scores, k=4):
 
 
 
-if args.name == "random":
+if args.defense == "random":
     loader = DataLoader(eval_dataset, batch_size=args.batch_size, num_workers=2,shuffle=False,sampler = torch.utils.data.RandomSampler(eval_dataset, replacement=False, num_samples=int(1e10))) 
-elif args.name == "LIDS":
-    ae_dataset = torch.load(args.lisd_dataset_path)
+elif args.defense in ['LIDS','LIDS-A']:
+    ae_dataset = torch.load(args.lids_dataset_path)
     print(f"Loaded dataset type: {type(ae_dataset)}")
     print(f"Testset len: {len(ae_dataset)}")
     smote_to_base = {}
@@ -206,12 +220,49 @@ elif args.name == "LIDS":
         num_workers=2,
         sampler=sampler,
     )
+else:
+    loader = DataLoader(eval_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2)
+# -------------------------------------
+# Output & Test Data Paths
+# -------------------------------------
+# Images output
+output_folder = os.path.join('images', args.dataset, args.defense, args.atk_prop)
+if args.defense in ['LIDS','LIDS-A']:
+    output_folder = os.path.join(
+        output_folder,
+        args.img_distance,
+        f"base_num_{args.base_num}",
+        f"finetune_i{args.init_finetune_epoch}_n{args.finetune_images_num}_e{args.finetune_epoch}",
+        f"init-{args.init_alpha}-max-{args.max_alpha}"
+    )
+os.makedirs(output_folder, exist_ok=True)
+
+# Test data pickle output
+test_data_output_dir = os.path.join('test_data', args.dataset, args.defense, args.atk_prop)
+if args.defense in ['LIDS','LIDS-A']:
+    test_data_output_dir = os.path.join(
+        test_data_output_dir,
+        f"base_num_{args.base_num}",
+        f"finetune_i{args.init_finetune_epoch}_n{args.finetune_images_num}_e{args.finetune_epoch}",
+        f"init-{args.init_alpha}-max-{args.max_alpha}"
+    )
+os.makedirs(test_data_output_dir, exist_ok=True)
+
+# CSV output
+csv_output_dir = os.path.join('csv_file', args.dataset, args.defense, args.atk_prop)
+if args.defense in ['LIDS','LIDS-A']:
+    csv_output_dir = os.path.join(
+        'csv_file',
+        f"base_num_{args.base_num}",
+        f"finetune_i{args.init_finetune_epoch}_n{args.finetune_images_num}_e{args.finetune_epoch}",
+        f"init-{args.init_alpha}-max-{args.max_alpha}"
+    )
+os.makedirs(csv_output_dir, exist_ok=True)
 
 ssims = []
 psnrs = []
 base_ssims = []
 base_psnrs = []
-
 class Args:
     def __init__(self):
         self.device = args.device
@@ -242,10 +293,6 @@ ssims, psnrs, lpips_list = [], [], []
 metrics = []
 
 
-output_folder = f"images/paper/{args.dataset}/{args.name}/{args.atk_prop}"
-if args.name == "LIDS":
-    output_folder = f"images/paper/autoencoder/{args.dataset}/{args.augment}/{args.img_distance}/finetune_epoch{args.finetune_epoch}/finetune_images-{args.finetune_images_num}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/{args.atk_prop}/dynamic_alpha/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1/psnr-{args.psnr_threshold}"
-os.makedirs(output_folder, exist_ok=True)
 repeat_num = args.batch_size // args.base_num
 
 for i, (X, y) in enumerate(loader):
@@ -265,7 +312,7 @@ for i, (X, y) in enumerate(loader):
     batch_indices = []
     
 
-    if args.name == "LIDS":
+    if args.defense == "LIDS":
         batch_indices = list(iter(loader.sampler))[i*args.batch_size:(i+1)*args.batch_size]
         print(f"batch_idx {i} batch_indices: {batch_indices}")
         neiglhbor_num = int(args.batch_size // args.base_num)-1
@@ -356,8 +403,6 @@ for i, (X, y) in enumerate(loader):
             "lpips": LPIPS,
         })
         
-   
-    
 Rec_batches = 0
 for i in range(len(psnrs)):
     if psnrs[i] >= 19:
@@ -388,25 +433,23 @@ test_results= {
         "PSNR_Top_mean": PSNR_Top_mean,
         "PSNR_Top_std": PSNR_Top_std,
         }
-test_data_output_dir = f"./test_data/paper/{args.dataset}/{args.name}/{args.atk_prop}"
-if args.name == "LIDS":
-    test_data_output_dir = f"./test_data/paper/{args.dataset}/{args.name}/{args.augment}/{args.atk_prop}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1/"
-    test_data_output_path = test_data_output_dir + f"psnr_threshold-{args.psnr_threshold}.pkl"    
+
+from pathlib import Path
+
+csv_dir = Path(csv_output_dir)
+test_dir = Path(test_data_output_dir)
+
+if args.defense in ["LIDS", "LIDS-A"]:
+    csv_output_path       = csv_dir / f"psnr_{args.psnr_threshold}.csv"
+    item_csv_output_path  = csv_dir / f"itemwise_psnr_{args.psnr_threshold}.csv"
+    test_data_output_path = test_dir / f"psnr_threshold-{args.psnr_threshold}.pkl"
 else:
-    test_data_output_path = test_data_output_dir + f".pkl"     
-os.makedirs(test_data_output_dir, exist_ok=True)
+    csv_output_path       = csv_dir / f"{args.defense}.csv"
+    item_csv_output_path  = csv_dir / f"{args.defense}_itemwise.csv"
+    test_data_output_path = test_dir / f"{args.defense}.pkl"   
 pickle.dump(test_results, open(test_data_output_path, 'wb'))
 
 
-if args.name == "LIDS":
-    csv_output_dir = f"./csv_file/paper/{args.dataset}/{args.augment}/{args.img_distance}/{args.finetune_images_num}/{args.finetune_epoch}/base_num_{args.base_num}/repeat_num_{args.repeat_num}/{args.atk_prop}/init-{args.init_alpha}-max-{args.max_alpha}/rand_aug_1"
-    csv_output_path = csv_output_dir + f"/psnr{args.psnr_threshold}.csv"
-    item_csv_output_path = csv_output_dir + f"/itemwise_psnr{args.psnr_threshold}.csv"
-else:
-    csv_output_dir = f"./csv_file/paper/{args.dataset}/{args.name}/rand_aug_1/{args.atk_prop}"
-    csv_output_path = csv_output_dir + f".csv"    
-    item_csv_output_path = csv_output_dir + f"/itemwise.csv"
-os.makedirs(csv_output_dir, exist_ok=True)
 with open(csv_output_path, 'w', newline='') as csvfile:
     writer = csv.writer(csvfile)
     writer.writerow([
