@@ -101,7 +101,9 @@ def main():
         print(f"Original dataset size: {len(target_dataset)}")
         new_ds, smote_base, smote_neighbor, smote_alpha = generate_dataset(args, target_dataset)
         print(f"Generated samples: {len(new_ds)}")
-
+        print(f"smote_base: {len(smote_base)}")
+        print(f"smote_neighbor: {len(smote_neighbor)}")
+        print(f"smote_alpha: {len(smote_alpha)}")
         # Combine original and generated samples
         origin_imgs = torch.stack([target_dataset[i][0] for i in range(len(target_dataset))])
         origin_lbls = torch.tensor([target_dataset[i][1] for i in range(len(target_dataset))])

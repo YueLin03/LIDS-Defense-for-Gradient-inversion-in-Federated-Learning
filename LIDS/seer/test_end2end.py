@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 from train import *
 from data import *
 from model import *
-from lids_dataset import LIDS_Dataset
 from dataloader import SimpleSampler
+from lids_dataset import LIDS_Dataset
 from simple_breach import run_metrics
 from parameters import *
 # -------------------------------------
@@ -23,15 +23,15 @@ from parameters import *
 parser = argparse.ArgumentParser(description='sampler defense')
 parser.add_argument('--train', type=str, choices=['False','True'], default='False')
 parser.add_argument('--seed', type=int, default=1337)
-parser.add_argument('--defense', type=str, choices=['default','random','LIDS','LIDS-A'], default='default')
+parser.add_argument('--defense', type=str, choices=['default','NO-DEFENSE','LIDS','LIDS-A'], default='default')
 parser.add_argument('--device', type=str, default='cuda:0')
 parser.add_argument('--atk-prop', type=str, default='bright')
 parser.add_argument('--n-components', type=int, default=17)
 parser.add_argument('--dataset', type=str, choices=['Cifar10','Cifar100'], default='Cifar10')
-parser.add_argument('--model', type=str, required=True)
 parser.add_argument('--random-loader', type=bool, default=False)
 parser.add_argument('--batch-size', type=int, default=64)
 parser.add_argument('--base-num', type=int, default=8)
+parser.add_argument('--init-finetune-epoch', type=int, default=2000)
 parser.add_argument('--finetune-epoch', type=int, default=1000)
 parser.add_argument('--finetune-images-num', type=int, default=10000)
 parser.add_argument('--psnr-threshold', type=float, default=18.0)
@@ -51,8 +51,8 @@ print(args)
 # Build LIDS Dataset Paths
 # -------------------------------------
 base_dataset_dir = (
-    f"./lids_datasets/{args.dataset}/train_{args.train}/"
-    f"denorm_{args.denormalize}/{args.img_distance}/"
+    f"../lids_datasets/{args.dataset}/train_{args.train}/"
+    f"denorm_False/{args.img_distance}/"
     f"finetune_i{args.init_finetune_epoch}_n{args.finetune_images_num}_"
     f"e{args.finetune_epoch}/psnr_thresh{args.psnr_threshold}"
 )
@@ -60,9 +60,9 @@ base_dataset_dir = (
 lids_A_path = os.path.join(base_dataset_dir, 'aug_False.dst')
 lids_path   = os.path.join(base_dataset_dir, 'aug_True.dst')
 
-if args.defense in ['LIDS','LIDS-A'] and args.lids_dataset_path is None:
+if args.defense in ['LIDS','LIDS-A'] and (args.lids_dataset_path is None or args.lids_dataset_path == ""):
     args.lids_dataset_path = lids_A_path if args.defense=='LIDS-A' else lids_path
-
+print(f"Target dataset: {args.lids_dataset_path}")
 # -------------------------------------
 # Dataset & Transforms
 # -------------------------------------
@@ -148,9 +148,12 @@ eval_dataset = testset if args.defense!='red_dataset' else red_dataset
 
 
 
-args.model = f"../weights/B64C1{args.atk_prop}{args.dataset}Epoch1000.params"
-checkpoint = torch.load(args.model, map_location=torch.device('cpu'))
-print(f"model{args.model}")
+atk_model_path = f"../weights/B64C1{args.atk_prop}{args.dataset}Epoch1000.params"
+if not os.path.exists(atk_model_path) :
+    print(f"No attack model. please put the model in path {atk_model_path}")
+    exit(0)
+checkpoint = torch.load(atk_model_path, map_location=torch.device('cpu'))
+print(f"Load model: {atk_model_path}")
 device = args.device
 
 if (args.dataset =="Cifar10"):
@@ -189,7 +192,7 @@ def get_top_k_indices(psnr_scores, k=4):
 
 
 
-if args.defense == "random":
+if args.defense == "NO-DEFENSE":
     loader = DataLoader(eval_dataset, batch_size=args.batch_size, num_workers=2,shuffle=False,sampler = torch.utils.data.RandomSampler(eval_dataset, replacement=False, num_samples=int(1e10))) 
 elif args.defense in ['LIDS','LIDS-A']:
     ae_dataset = torch.load(args.lids_dataset_path)
@@ -203,7 +206,13 @@ elif args.defense in ['LIDS','LIDS-A']:
     for smote, neighbor in ae_dataset.smote_to_neighbor.items():
         smote_to_neighbor[smote+ae_dataset.origin_datalen] = neighbor    
     for smote, alpha in ae_dataset.smote_to_alpha.items():
-        smote_to_alpha[smote+ae_dataset.origin_datalen] = alpha    
+        smote_to_alpha[smote+ae_dataset.origin_datalen] = alpha  
+    print(f"ae_dataset.origin_datalen {ae_dataset.origin_datalen}")
+    print(f"len(ae_dataset) {len(ae_dataset)}")
+    print(f"args.dataset_group_size {args.dataset_group_size}")
+    print(f"int(args.batch_size // args.base_num) {int(args.batch_size // args.base_num)}")
+    print(f"args.repeat_num {args.repeat_num}")
+    print(f"ae_dataset.base_to_smote {(ae_dataset.base_to_smote)}")
     sampler = SimpleSampler(ae_dataset.origin_datalen, len(ae_dataset),args.dataset_group_size,int(args.batch_size // args.base_num),args.repeat_num,ae_dataset.base_to_smote)
     batches_image_indices = sampler.final_indices
     batch_indices = []
@@ -286,7 +295,7 @@ def save_image(image, file_path):
     ax.axis('off')  # Remove axes for a clean image
     plt.savefig(file_path, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close(fig)  # Close the figure to avoid memory issues
-print(f"attack prop: {args.atk_prop}, defense prop: {args.def_prop}")
+print(f"attack prop: {args.atk_prop}")
 
 TARGET_indices, TARGET_class = [], []
 ssims, psnrs, lpips_list = [], [], []

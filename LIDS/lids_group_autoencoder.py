@@ -129,108 +129,269 @@ class LIDSGroupAutoencoder:
 
         # Mappings
         self.smote_to_base = {}
+        self.base_to_smoteList = {}
         self.smote_to_neighbor = {}
         self.smote_to_alpha = {}
-
-    def _prepare_dataset(self, target_dataset):
-        """
-        Flatten images and apply PCA for latent interpolation.
-        """
-        images = np.stack([x for x, _ in target_dataset])
-        vectors = images.reshape(len(images), -1)
-        labels = np.array([y for _, y in target_dataset])
+        self.neighbor_list = {}
+        self.all_smote_indices = []
+    def _prepare_dataset(self, eval_dataset):
+        # Extract and normalize dataset vectors
+        vectors = np.vstack([X.reshape(-1) for X, y in eval_dataset])
+        all_images = np.stack([X for X, y in eval_dataset])
+        labels = torch.Tensor([y for _, y in eval_dataset])
         pca = PCA(n_components=self.n_components)
-        vectors_pca = pca.fit_transform(vectors)
-        return images, vectors_pca, labels, pca
+        vectors_transformed = pca.fit_transform(vectors)
 
-    def generate_smote_samples(self, target_dataset, finetune_epoch: int = 200):
-        """
-        Create synthetic samples by interpolating latent representations.
-        """
-        images_np, vectors_pca, labels, pca = self._prepare_dataset(target_dataset)
-        images_t = torch.from_numpy(images_np).to(self.device)
+        return vectors, vectors_transformed, all_images, labels, pca
 
-        # Define group splits
-        idxs = np.arange(len(target_dataset))
-        np.random.shuffle(idxs)
-        groups = np.array_split(idxs, len(idxs) // self.finetune_images_num)
+    def _get_class_data(self, vectors, all_images, labels, pca):
+        # Group data by class for PCA transformation
+        xclass_idx = []
+        torch_xclass = []
+        xclass = []
+        yclass = []
+        class_vectors_transformed = []
 
-        samples, sample_labels, alphas = [], [], []
-        total_time = 0
-        for gid, grp in enumerate(groups):
-            start = time.time()
-            ae = self._batch_finetune([target_dataset[i] for i in grp], finetune_epoch, gid)
-            total_time += time.time() - start
-            
-            # Class-wise neighbor selection
-            for base_idx in grp:
-                lbl = int(labels[base_idx])
-                same_cls = grp[labels[grp] == lbl]
-                if len(same_cls) < 2:
-                    continue
+        for c in range(self.class_num):
+            class_mask = labels == c
+            torch_x_c = all_images[class_mask]
+            x_c = vectors[class_mask]
+            y_c = labels[class_mask]
+            x_idx = np.where(class_mask)[0]
 
-                # Compute distances
-                if self.args.img_distance == "MSE":
-                    dists = F.mse_loss(
-                        images_t[base_idx].unsqueeze(0),
-                        images_t[same_cls],
-                        reduction="none"
-                    ).view(len(same_cls), -1).sum(dim=1).cpu().numpy()
-                else:
-                    dists = np.linalg.norm(vectors_pca[base_idx] - vectors_pca[same_cls], axis=1)
+            x_c_transformed = pca.transform(x_c)
 
-                # Select nearest neighbors
-                nbrs = [same_cls[i] for i in np.argsort(dists)[: max(1, self.batch_size//self.base_num - 1)]]
-                #print(f"base{base_idx} len of neighbors {len(nbrs)}")
-                # Generate samples per neighbor
-                for nbr in nbrs:
-                    out_samps, out_lbls, out_als = self._generate_samples(
-                        ae, images_np[base_idx], images_np[nbr], lbl
-                    )
-                    samples.extend(out_samps)
-                    sample_labels.extend(out_lbls)
-                    alphas.extend(out_als)
-            if (len(samples)%1000 == 0):
-                print(f"Generate {len(samples)} imgs")
+            xclass_idx.append(x_idx)
+            torch_xclass.append(torch_x_c)
+            xclass.append(x_c)
+            yclass.append(y_c)
+            class_vectors_transformed.append(x_c_transformed)
 
-        dataset = TensorDataset(
-            torch.tensor(np.stack(samples), dtype=torch.float32),
-            torch.tensor(sample_labels, dtype=torch.long)
+        return xclass_idx, torch_xclass,xclass, yclass, class_vectors_transformed
+
+    def generate_smote_samples(self, eval_dataset, finetune_epoch=200):
+        # Prepare data and apply PCA transformation
+        vectors, vectors_transformed, all_images, labels, pca = self._prepare_dataset(eval_dataset)
+        all_images_torch = torch.from_numpy(all_images)
+        xclass_idx,torch_xclass, xclass, yclass, class_vectors_transformed = self._get_class_data(
+            vectors,all_images_torch, labels, pca
         )
-        print(f"Generated {len(samples)} latent samples in {total_time:.1f}s")
-        return dataset, self.smote_to_base, self.smote_to_neighbor, self.smote_to_alpha
 
-    def _generate_samples(self, ae, base, neighbor, label):
+        
+        smote_img_list = []
+        smote_label_list = []
+
+        t0 = time.time()
+        sum_of_finetune = 0.0
+
+        Base_table = {}
+        finetune_dataidx = set()
+        neighbor_table = {}
+        autoencoder_table = {}
+        neighbor_num = int(self.batch_size // self.base_num)-1
+        base_list = []
+        # Divide dataset into manageable groups for SMOTE generation
+        #total number of autoencoder = n_groups
+        # 使用 while 迴圈，確保 eval_dataset 中的每張圖片都被當作 base 處理一次
+        current_idx = 0  # 當前處理的圖片索引
+        autoencoder_idx = 0 
+        finetune_list = [idx for idx in range(len(eval_dataset))]
+        autoencoder_finetune_dataidx = {}
+        '''
+        for xclass in xclass_idx:
+            finetune_list.extend(xclass)
+        '''
+        while current_idx < len(eval_dataset):
+            selected_data = []
+            # 遍歷 eval_dataset，將 base 和其 neighbors 加入選擇的數據
+            while len(finetune_dataidx) <= self.finetune_images_num and current_idx < len(eval_dataset):
+                selected_data = []
+                base_idx = finetune_list[current_idx]
+                
+                class_idx = int(labels[base_idx].item())
+                base_image = all_images[base_idx]
+                base_torch = all_images_torch[base_idx]
+                # 計算鄰近點
+                real_indices = xclass_idx[class_idx]
+                if self.args.img_distance == "MSE":
+                    #print(base_torch.shape)
+                    #print(torch_xclass[class_idx].shape)
+                    with torch.no_grad():
+                        distances = torch.nn.functional.mse_loss(base_torch.unsqueeze(0), torch_xclass[class_idx], reduction="none").sum(dim=(1, 2, 3))
+                else:
+                    distances = np.linalg.norm(
+                        vectors_transformed[base_idx] - class_vectors_transformed[class_idx],
+                        axis=1
+                    )
+                neighbor_indices = real_indices[np.argsort(distances)[:neighbor_num + 1]][1:]  # 排除自身
+                neighbor_table[base_idx] = neighbor_indices
+                self.neighbor_list[base_idx] = neighbor_indices
+                '''
+                skip = False
+                for cur_autoencoder_idx, finetune_dataidx in autoencoder_finetune_dataidx.items():
+                    flag =True
+                    if (base_idx not in finetune_dataidx):
+                        flag = False
+                        continue
+                    for n_idx in neighbor_table[base_idx]:
+                        if n_idx not in finetune_dataidx:
+                            flag = False
+                            break
+                    if(flag == True):
+                        Base_table[cur_autoencoder_idx].append(base_idx)
+                        skip = True
+                        break
+                if (skip == True):
+                    current_idx += 1
+                    continue  
+                '''  
+                # 添加 base 和 neighbors 到選擇的數據中
+                selected_data.append(base_idx)
+                selected_data.extend([idx for idx in neighbor_indices])
+                base_list.append(base_idx)
+                current_idx += 1  # 移動到下一張圖片
+
+                # 將選擇的數據加入 fine-tune 數據庫
+                finetune_dataidx.update(selected_data)
+
+            # 如果達到指定的 fine-tune 數量，或者是最後一組，執行 fine-tune
+            if len(finetune_dataidx) >= self.args.finetune_images_num or current_idx >= len(eval_dataset)-1:
+                
+
+                Base_table[autoencoder_idx] = base_list
+                print(f"autoencoder_idx{autoencoder_idx} = {base_list}")
+                t_start = time.time()
+
+                # 執行 fine-tune
+                finetune_database = [eval_dataset[idx] for idx in finetune_dataidx]
+                batch_autoencoder = self._batch_finetune(finetune_database, finetune_epoch, autoencoder_idx)
+                t_end = time.time()
+                autoencoder_table[autoencoder_idx] = batch_autoencoder
+
+                # 計算 fine-tune 總時間並清空數據庫
+                sum_of_finetune += (t_end - t_start)
+                autoencoder_finetune_dataidx[autoencoder_idx] = finetune_dataidx
+                autoencoder_idx+=1
+                finetune_dataidx.clear()  # 清空數據庫以便下一次 fine-tune
+                base_list = []
+
+        # Generate SMOTE samples using the trained autoencoders
+        for group_idx in range(len(autoencoder_table.items())):
+            base_list = Base_table[group_idx]
+            batch_autoencoder = autoencoder_table[group_idx] 
+            batch_autoencoder.eval()   
+            for base_idx in base_list:
+                class_idx = int(labels[base_idx].item())
+                base_image = all_images[base_idx]
+                neighbor_indices = neighbor_table[base_idx]
+
+                smote_img, smote_label, alpha = self._generate_samples(
+                    batch_autoencoder,
+                    base_image,
+                    all_images[neighbor_indices],
+                    class_idx
+                )    
+                smote_indices = list(range(
+                    len(self.all_smote_indices),
+                    len(self.all_smote_indices) + len(smote_img)
+                ))
+                self.all_smote_indices.extend(smote_indices)
+                self.base_to_smoteList[base_idx] = smote_indices
+                for idx in smote_indices:
+                    self.smote_to_base[idx] = base_idx
+                for n_idx, idx in enumerate(smote_indices):
+                    self.smote_to_neighbor[idx] = neighbor_indices[n_idx]
+                    self.smote_to_alpha[idx] = alpha[n_idx]
+                smote_img_list.extend(smote_img)
+                smote_label_list.extend(smote_label)
+                if (len(smote_img_list)%100 == 0):
+                    print(f"Generate img {len(smote_img_list)}",flush=True)
+
+        smote_dataset = TensorDataset(
+            torch.tensor(np.stack(smote_img_list), dtype=torch.float32),
+            torch.tensor(smote_label_list, dtype=torch.int64)
+        )
+        t1 = time.time()
+        self.file.write(f"Time of generating image: {t1-t0}\n \
+                          Total time for fine-tuning: {sum_of_finetune:.2f} seconds\n")
+        print(f"Time of generating image: {t1-t0}")
+        print(f"Total time for fine-tuning: {sum_of_finetune:.2f} seconds")
+        if self.file:
+            self.file.write("=== Log End ===\n")
+            self.file.close()
+            self.file = None
+        alpha_num = {}
+        for idx,alpha in self.smote_to_alpha.items():
+            alpha = int(round(alpha * 1000,1))
+            if alpha not in alpha_num.keys():
+                alpha_num[alpha] = 1
+            else:
+                alpha_num[alpha] += 1
+        print("All alpha")
+        for alpha, count in sorted(alpha_num.items()):
+            print(f"alpha {float(alpha / 1000.0)} = {count}")
+        return smote_dataset, self.smote_to_base,self.smote_to_neighbor,self.smote_to_alpha
+
+    def _generate_samples(self, autoencoder, base, neighbors, label):
         """
-        Interpolate between base and neighbor in latent space and filter by PSNR.
+        Generate interpolated samples using autoencoder with PSNR-based filtering.
+
+        Args:
+            autoencoder: Fine-tuned autoencoder
+            base: Base image
+            neighbors: Neighboring images
+            label: Class label
+
+        Returns:
+            Generated samples, their labels, and a list of alpha values used.
         """
-        base_t = torch.tensor(base, dtype=torch.float32, device=self.device).unsqueeze(0)
-        nbr_t = torch.tensor(neighbor, dtype=torch.float32, device=self.device).unsqueeze(0)
+        base_tensor = torch.tensor(base, dtype=torch.float32, device=self.device).unsqueeze(0)
+        neighbor_tensor = torch.tensor(neighbors, dtype=torch.float32, device=self.device)
 
-        enc_base = ae.encoder(base_t)
-        enc_nbr = ae.encoder(nbr_t)
 
-        out_samps, out_labels, out_als = [], [], []
-        alpha = self.init_alpha
-        while alpha <= self.max_alpha:
-            interp = enc_nbr + alpha * (enc_base - enc_nbr)
-            dec = ae.decoder(interp).squeeze(0).detach().cpu().numpy()
-            if get_psnr(base_t.squeeze().detach().cpu().numpy(), dec) > self.psnr_threshold:
-                out_samps.append(dec)
-                out_labels.append(label)
-                out_als.append(alpha)
-                break
-            alpha = round(alpha + 0.025, 4)
+        # Encode base and neighbor images
+        enc_base = autoencoder.encoder(base_tensor)
+        enc_neighbors = autoencoder.encoder(neighbor_tensor)
 
-        # If no sample passes threshold, use max_alpha
-        if alpha > self.max_alpha:
-            interp = enc_nbr + self.max_alpha * (enc_base - enc_nbr)
-            dec = ae.decoder(interp).squeeze(0).detach().cpu().numpy()
-            out_samps.append(dec)
-            out_labels.append(label)
-            out_als.append(self.max_alpha)
+        samples = []
+        labels = []
+        alphas_used = []
 
-        return out_samps, out_labels, out_als
+        for i, enc_neighbor in enumerate(enc_neighbors):
+            alpha = self.init_alpha
+            current_enc = enc_base
+            while alpha <= self.max_alpha:
+                # Interpolate in latent space
+                interpolated_enc = enc_neighbor + alpha * (current_enc - enc_neighbor)
+
+                # Decode the interpolated encoding
+                decoded_sample = autoencoder.decoder(interpolated_enc)
+                decoded_sample_np = decoded_sample.squeeze(0).detach().cpu().numpy()
+
+                # Calculate PSNR between the decoded sample and base image
+                psnr_value = get_psnr(base, decoded_sample_np)
+
+                if psnr_value > self.psnr_threshold:
+                    samples.append(decoded_sample_np)
+                    labels.append(label)
+                    alphas_used.append(alpha)
+                    break
+
+                alpha += 0.025
+                alpha  = round(alpha, 4)
+            # If no valid sample was found, append the final alpha sample
+            if alpha > self.max_alpha:
+                interpolated_enc = enc_neighbor + self.max_alpha * (current_enc - enc_neighbor)
+                decoded_sample = autoencoder.decoder(interpolated_enc)
+                decoded_sample_np = decoded_sample.squeeze(0).detach().cpu().numpy()
+                samples.append(decoded_sample_np)
+                labels.append(label)
+                alphas_used.append(self.max_alpha)
+            #save_image(decoded_sample_np,f"images/smote/A{i}_psnr{psnr_value}_decoded_img_alpha{alpha}.png")
+            #save_image(neighbor_tensor[i],f"images/smote/A{i}_psnr{psnr_value}_neighbor_tensor_alpha{alpha}.png")
+            #save_image(base_tensor.squeeze(),f"images/smote/A{i}_psnr{psnr_value}_base_tensor_alpha{alpha}.png")
+            
+        return np.array(samples), labels, alphas_used
 
     def _batch_finetune(self, data_batch, epochs: int, batch_idx: int) -> nn.Module:
         """
