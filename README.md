@@ -29,6 +29,11 @@ To run the LIDS experiments, please run the following command:
 ```bash
 TRAIN=False DATASET=Cifar100 PSNR_THRESHOLD=18.0 bash generate_lids_dataset.sh 
 ```
+### Test SEER with LIDS defense
+Before running the end-to-end test, ensure you have generated the LIDS dataset and trained the attack model. Then, from within the `seer/` directory, execute:
+```bash
+bash test_end2end.sh
+```
 ### LIDS without augmentation (LIDS-A)
 
 ### LIDS (LIDS)
