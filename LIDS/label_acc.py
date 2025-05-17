@@ -1,3 +1,4 @@
+import os
 import argparse
 import pickle
 import torch
@@ -9,9 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 parser = argparse.ArgumentParser(description='label acc')
 parser.add_argument('--device', type=str, default="cuda:0")
 parser.add_argument('--attack_prop', type=str, default="bright")
-# parser.add_argument('--loader_type', type=str, default="random")
-parser.add_argument('--thresh', type=str, default="15.0")
-# parser.add_argument('--repeat', type=str, default="0")
+parser.add_argument('--thresh', type=str, default="18.0")
 parser.add_argument('--dataset', type=str, default="Cifar100")
 parser.add_argument('--basenum', type=int, default=16)
 
@@ -38,7 +37,8 @@ class ImageTagDataset(Dataset):
         return self.rec_img[idx], self.tar_tags[idx]
 
 # TODO: change base path
-base_path = f"/test_data/paper/{dataset}/OGM/Norm/{attack_prop}/base_num_{base_num}/repeat_num_0/psnr_threshold-{thresh}.pkl"
+
+base_path = f"seer/test_data/{dataset}/LIDS/{attack_prop}/base_num_16/finetune_i2000_n10000_e1000/init-0.5-max-0.9/psnr_threshold-{thresh}.pkl"
 results: list[dict] = pickle.load(open(base_path, 'rb'))
 
 if dataset == "Cifar10":
@@ -95,5 +95,6 @@ for inputs, labels in dataloader:
 
 print(f'correct: {correct}, total: {total} acc: {correct / total * 100:.4f}%')
 
+os.makedirs('logs', exist_ok=True)
 with open(f'logs/RLA_results.txt', 'a+', encoding='utf-8') as f:
-    f.write(f"prop {attack_prop}, thresh {thresh}, {dataset}, {correct / total * 100:.4f}\n")
+    f.write(f"prop {attack_prop}, thresh {thresh}, dataset {dataset}, {correct / total * 100:.4f}\n")

@@ -1,11 +1,15 @@
 import torch
 import torchvision
 from torchvision import transforms
+from torch.utils.data import random_split
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import torch
 from collections import defaultdict
+import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 import torchvision.transforms.v2 as v2
+
 
 class FixDataset(Dataset):
     def __init__(self, data, labels, transforms=None):
@@ -67,21 +71,21 @@ def datasets_train_Cifar10(seed=1337):
     data_std = (0.24703224003314972, 0.24348513782024384, 0.26158785820007324)
 
     
-    transform_better = v2.Compose(
+    transform_better = transforms.Compose(
         [
-            v2.RandomCrop(32, padding=4),
-            v2.RandomHorizontalFlip(),
-            v2.ToImage(), 
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Normalize(mean=data_mean, std=data_std),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=data_mean, std=data_std),
         ]
     )
     
-    transform_test = v2.Compose(
-    [v2.ToImage(), 
-    v2.ToDtype(torch.float32, scale=True),
-
-     v2.Normalize(data_mean, data_std)])
+    transform_test = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(mean=data_mean, std=data_std),
+        ]
+    )
 
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_better)
     testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
@@ -115,21 +119,21 @@ def datasets_train_Cifar100(seed=1337):
     data_std = (0.2673342823982239, 0.2564384639263153, 0.2761504650115967)
 
     
-    transform_better = v2.Compose(
+    transform_better = transforms.Compose(
         [
-            v2.RandomCrop(32, padding=4),
-            v2.RandomHorizontalFlip(),
-            v2.ToImage(), 
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Normalize(mean=data_mean, std=data_std),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=data_mean, std=data_std),
         ]
     )
     
-    transform_test = v2.Compose(
-    [v2.ToImage(), 
-    v2.ToDtype(torch.float32, scale=True),
-
-     v2.Normalize(data_mean, data_std)])
+    transform_test = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(mean=data_mean, std=data_std),
+        ]
+    )
 
     trainset = torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform_better)
     testset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_test)
@@ -167,24 +171,24 @@ def datasets_train_grouped(seed=1337, thresh="18.0", dataset="Cifar100"):
         data_mean = (0.5071598291397095, 0.4866936206817627, 0.44120192527770996)
         data_std = (0.2673342823982239, 0.2564384639263153, 0.2761504650115967)
 
-    dataset_path = f"/trainingData/sage/alan/defence_seer/defence/datasets/{dataset}/trainset/init_2000/Norm/MSE/paper/denorm/rand_aug_1/finetune1000epoch_psnr_thresh{thresh}finetune_images_num10000.dst"
+    dataset_path = f"lids_datasets/{dataset}/train_True/denorm_False/MSE/finetune_i2000_n10000_e1000/psnr_thresh{thresh}/aug_True.dst"
     ae_dataset = torch.load(dataset_path, weights_only=False)
     
-    
-    transform_better = v2.Compose(
+    transform_better = transforms.Compose(
         [
-            v2.RandomCrop(32, padding=4),
-            v2.RandomHorizontalFlip(),
-            v2.ToImage(), 
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Normalize(mean=data_mean, std=data_std),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=data_mean, std=data_std),
         ]
     )
     
-    transform_test = v2.Compose(
-    [v2.ToImage(), 
-    v2.ToDtype(torch.float32, scale=True),
-     v2.Normalize(data_mean, data_std)])
+    transform_test = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(mean=data_mean, std=data_std),
+        ]
+    )
 
     if dataset == "Cifar100":
         testset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_test)

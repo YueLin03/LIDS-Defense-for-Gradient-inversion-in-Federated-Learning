@@ -33,9 +33,9 @@ parser.add_argument('--dataset', type=str, default='Cifar100')
 parser.add_argument('--lids', action='store_true', help='Use grouped dataset')
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--num_epochs', type=int, default=12)
-parser.add_argument('--device', type=str, default="cuda:1")
+parser.add_argument('--device', type=str, default="cuda:0")
 parser.add_argument('--weight_decay', type=float, default=5e-4)
-parser.add_argument('--thresh', type=str, default="15.0")
+parser.add_argument('--thresh', type=str, default="18.0")
 
 args = parser.parse_args()
 
@@ -82,7 +82,7 @@ optimizer = optim.Adam([
 
 scheduler = OneCycleLR(optimizer, learning_rate, epochs=num_epochs, steps_per_epoch=len(trainloader))
 
-model = torch.compile(model)
+# model = torch.compile(model)
 
 def train(epoch, logfile):
     model.train()
