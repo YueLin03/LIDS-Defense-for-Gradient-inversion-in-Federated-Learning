@@ -1,4 +1,5 @@
 # LIDS-Defense-for-Gradient-inversion-in-Federated-Learning
+Read the Paper (PDF) (https://github.com/YueLin03/LIDS-Defense-for-Gradient-inversion-in-Federated-Learning/blob/main/LIDS_GLOBECOM2025_paper.pdf)
 This repository is currently undergoing active refactoring and modularization. 
 
 ## Train SEER model
