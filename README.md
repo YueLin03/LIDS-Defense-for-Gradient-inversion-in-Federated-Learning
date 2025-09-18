@@ -60,4 +60,4 @@ python3 train_resnet.py --dataset Cifar100 --lids
 the results will be saved in the `LIDS/logs` folder.
 
 # Read the Paper (PDF) 
-LIDS_GLOBECOM2025_paper.pdf
+See `LIDS_GLOBECOM2025_paper.pdf`
