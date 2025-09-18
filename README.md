@@ -1,6 +1,9 @@
 # LIDS-Defense-for-Gradient-inversion-in-Federated-Learning
 This repository is currently undergoing active refactoring and modularization. 
 
+## Paper 
+For the full paper, please see `LIDS_GLOBECOM2025_paper.pdf`
+
 ## Train SEER model
 To train the required SEER models, please follow the instructions in `seer/README.md`. You should train combinations of the following model parameters and save the trained weights to the `LIDS/weights` folder. Alternatively, you can download the pre-trained SEER model from [Hugging Face (alan314159/LIDS)](https://huggingface.co/alan314159/LIDS) and place it in the `LIDS/weights` folder.
 
@@ -59,5 +62,4 @@ python3 train_resnet.py --dataset Cifar100 --lids
 
 the results will be saved in the `LIDS/logs` folder.
 
-# Read the Paper (PDF) 
-See `LIDS_GLOBECOM2025_paper.pdf`
+
